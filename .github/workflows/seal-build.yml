@@ -1,0 +1,74 @@
+# Sealed-libraries build: upstream builds and tests on Jenkins (Jenkinsfile ->
+# "test: baseline (main)" on eclipse-temurin 17 and "test: baseline (next)" on 21,
+# both running `./mvnw -s settings.xml clean dependency:list test -Dsort -U -B`),
+# with no GitHub Actions workflow that builds or tests. This mirrors those stages,
+# extended from `test` to `package` so the release jar is produced.
+name: Seal Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      test-filter:
+        description: "Optional surefire -Dtest selector; empty runs the full suite"
+        required: false
+        default: ""
+
+jobs:
+  build:
+    name: build-and-test (JDK ${{ matrix.java }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        java: ["17", "21"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ matrix.java }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+          cache: maven
+
+      - name: Build and test
+        env:
+          MAVEN_OPTS: "-Duser.name=spring-builds+jenkins"
+        run: |
+          COMMON="-s settings.xml -Dscan=false -Dgradle.cache.local.enabled=false -Dgradle.cache.remote.enabled=false"
+          if [ -n "${{ inputs.test-filter }}" ]; then
+            ./mvnw $COMMON clean package -Dsort -B -U -Dtest='${{ inputs.test-filter }}' -Dsurefire.failIfNoSpecifiedTests=false
+          else
+            ./mvnw $COMMON clean dependency:list package -Dsort -B -U
+          fi
+
+      - name: Report test results and skipped tests
+        if: always()
+        run: |
+          python3 - <<'EOF'
+          import glob, re, xml.etree.ElementTree as ET
+          tot = fail = err = skip = 0
+          skipped = []
+          for f in sorted(glob.glob("target/surefire-reports/TEST-*.xml")):
+              r = ET.parse(f).getroot()
+              tot += int(r.get("tests", 0)); fail += int(r.get("failures", 0))
+              err += int(r.get("errors", 0)); skip += int(r.get("skipped", 0))
+              for tc in r.iter("testcase"):
+                  s = tc.find("skipped")
+                  if s is not None:
+                      msg = s.get("message") or (s.text or "") or "no message (@Disabled without reason)"
+                      msg = re.sub(r"\s+", " ", msg).strip()
+                      skipped.append(f"{tc.get('classname')}.{tc.get('name')}: {msg}")
+          print(f"SUREFIRE SUMMARY: tests={tot} passed={tot-fail-err-skip} failures={fail} errors={err} skipped={skip}")
+          for s in skipped:
+              print("SKIPPED:", s)
+          EOF
+
+      - name: Upload jar
+        if: matrix.java == '17'
+        uses: actions/upload-artifact@v4
+        with:
+          name: spring-data-keyvalue-jar
+          path: target/spring-data-keyvalue-3.2.5.jar
+          if-no-files-found: error
