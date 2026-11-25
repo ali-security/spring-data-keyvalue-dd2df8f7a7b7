@@ -21,6 +21,11 @@ import java.util.Comparator;
 
 import org.junit.jupiter.api.Test;
 
+import org.springframework.data.domain.Sort;
+import org.springframework.data.domain.Sort.Direction;
+import org.springframework.data.keyvalue.core.query.KeyValueQuery;
+import org.springframework.expression.spel.SpelEvaluationException;
+import org.springframework.expression.spel.SpelMessage;
 import org.springframework.expression.spel.standard.SpelExpressionParser;
 
 /**
@@ -115,6 +120,46 @@ class SpelPropertyComperatorUnitTests {
 
 		SpelPropertyComparator<WrapperType> comparator = new SpelPropertyComparator<>("nestedType.stringProperty", PARSER);
 		assertThat(comparator.compare(WRAPPER_ONE, new WrapperType("two", null))).isGreaterThanOrEqualTo(1);
+	}
+
+	@Test // GH-684
+	void shouldRejectMethodInvocationInPath() {
+
+		Comparator<SomeType> comparator = new SpelPropertyComparator<>("stringProperty.toUpperCase()", PARSER);
+
+		assertThatExceptionOfType(SpelEvaluationException.class).isThrownBy(() -> comparator.compare(ONE, TWO))
+				.satisfies(ex -> assertThat(ex.getMessageCode()).isEqualTo(SpelMessage.METHOD_NOT_FOUND));
+	}
+
+	@Test // GH-684
+	void shouldRejectMethodInvocationOnRootObject() {
+
+		Comparator<SomeType> comparator = new SpelPropertyComparator<>("getStringProperty()", PARSER);
+
+		assertThatExceptionOfType(SpelEvaluationException.class).isThrownBy(() -> comparator.compare(ONE, TWO))
+				.satisfies(ex -> assertThat(ex.getMessageCode()).isEqualTo(SpelMessage.METHOD_NOT_FOUND));
+	}
+
+	@Test // GH-684
+	void shouldRejectMethodInvocationInNestedPath() {
+
+		Comparator<WrapperType> comparator = new SpelPropertyComparator<>("nestedType.stringProperty.concat('x')",
+				PARSER);
+
+		assertThatExceptionOfType(SpelEvaluationException.class)
+				.isThrownBy(() -> comparator.compare(WRAPPER_ONE, WRAPPER_TWO))
+				.satisfies(ex -> assertThat(ex.getMessageCode()).isEqualTo(SpelMessage.METHOD_NOT_FOUND));
+	}
+
+	@Test // GH-684
+	@SuppressWarnings("unchecked")
+	void shouldRejectMethodInvocationFromUserProvidedSort() {
+
+		KeyValueQuery<?> query = new KeyValueQuery<>(Sort.by(Direction.DESC, "stringProperty.toLowerCase()"));
+		Comparator<SomeType> comparator = (Comparator<SomeType>) new SpelSortAccessor(PARSER).resolve(query);
+
+		assertThatExceptionOfType(SpelEvaluationException.class).isThrownBy(() -> comparator.compare(ONE, TWO))
+				.satisfies(ex -> assertThat(ex.getMessageCode()).isEqualTo(SpelMessage.METHOD_NOT_FOUND));
 	}
 
 	public static class WrapperType {

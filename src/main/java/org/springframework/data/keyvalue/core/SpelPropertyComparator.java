@@ -22,7 +22,6 @@ import org.springframework.expression.spel.standard.SpelExpressionParser;
 import org.springframework.expression.spel.support.SimpleEvaluationContext;
 import org.springframework.lang.Nullable;
 import org.springframework.util.Assert;
-import org.springframework.util.comparator.NullSafeComparator;
 
 /**
  * {@link Comparator} implementation using {@link SpelExpression}.
@@ -33,6 +32,9 @@ import org.springframework.util.comparator.NullSafeComparator;
  * @param <T>
  */
 public class SpelPropertyComparator<T> implements Comparator<T> {
+
+	private static final Comparator<?> NULLS_FIRST = Comparator.nullsFirst(Comparator.naturalOrder());
+	private static final Comparator<?> NULLS_LAST = Comparator.nullsLast(Comparator.naturalOrder());
 
 	private final String path;
 	private final SpelExpressionParser parser;
@@ -116,26 +118,29 @@ public class SpelPropertyComparator<T> implements Comparator<T> {
 	 * @return
 	 */
 	protected String buildExpressionForPath() {
-
-		String rawExpression = String.format("#comparator.compare(#arg1?.%s,#arg2?.%s)", path.replace(".", "?."),
-				path.replace(".", "?."));
-
-		return rawExpression;
+		return String.format("#arg1?.%s", path.replace(".", "?."));
 	}
 
 	@Override
+	@SuppressWarnings("unchecked")
 	public int compare(T arg1, T arg2) {
+
+		Object value1 = getValue(arg1);
+		Object value2 = getValue(arg2);
+
+		return ((Comparator<Object>) (nullsFirst ? NULLS_FIRST : NULLS_LAST)).compare(value1, value2) * (asc ? 1 : -1);
+	}
+
+	private @Nullable Object getValue(@Nullable T arg) {
 
 		SpelExpression expressionToUse = getExpression();
 
-		SimpleEvaluationContext ctx = SimpleEvaluationContext.forReadOnlyDataBinding().withInstanceMethods().build();
-		ctx.setVariable("comparator", new NullSafeComparator(Comparator.naturalOrder(), this.nullsFirst));
-		ctx.setVariable("arg1", arg1);
-		ctx.setVariable("arg2", arg2);
+		SimpleEvaluationContext ctx = SimpleEvaluationContext.forReadOnlyDataBinding().build();
+		ctx.setVariable("arg1", arg);
 
 		expressionToUse.setEvaluationContext(ctx);
 
-		return expressionToUse.getValue(Integer.class) * (asc ? 1 : -1);
+		return expressionToUse.getValue();
 	}
 
 	/**
